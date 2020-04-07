@@ -1,0 +1,155 @@
+---
+- hosts: raspberrypi
+  remote_user: pi
+  become: true
+  vars:
+    network: "192.168.2.0"
+    network_1st_address: "192.168.2.1"
+    network_last_address: "192.168.2.6"
+    subnet: "29"
+    ssid: rpi_wap
+    wap_password: CHANGEME
+    hostapd_conf: "/etc/hostapd/hostapd.conf"
+    dns_server: '8.8.8.8'
+    outbound_device: "eth0"
+
+  tasks:
+
+  - name: Update all packages to the latest version
+    apt:
+      upgrade: dist
+  
+  - name: Run the equivalent of "apt-get update" as a separate step
+    apt:
+      update_cache: yes
+  
+  - name: Upgrade all packages to the latest version
+    apt:
+      name: "*"
+      state: latest
+  
+  - name: Install hostapd and dnsmasq
+    apt:
+      pkg:
+      - dnsmasq
+      - hostapd
+      - vim
+      - wireshark
+      - tshark
+      - bmon
+  
+  - name: stop dnsmasq and hostapd services
+    service:
+      name: "{{ item }}"
+      state: stopped
+    with_items:
+      - dnsmasq
+      - hostapd
+
+  - name: Augment dhcpcd.conf file
+    lineinfile:
+      path: /etc/dhcpcd.conf
+      line: "{{ item }}"
+      create: yes
+    with_items:
+      - 'interface wlan0'
+      - '    static ip_address={{ network }}/{{ subnet }}'
+      - '    nohook wpa_supplicant'
+  
+  - name: restart dhcpcd service
+    service:
+      name: dhcpcd
+      state: restarted
+
+  - name: Copy hostapd.conf template onto system 
+    template:
+      src: files/hostapd.conf.j2
+      dest: "{{ hostapd_conf }}"
+      backup: yes
+      mode: 0755
+      owner: root
+      group: root
+
+  - name: Update hostapd daemon to use our hostapd.conf
+    replace:
+      path: /etc/default/hostapd
+      regexp: '^#DAEMON_CONF=""'
+      replace: 'DAEMON_CONF="{{ hostapd_conf }}"'
+      owner: root
+      group: root
+
+  - name: Augment dhcpcd.conf file
+    lineinfile:
+      path: /etc/dnsmasq.conf
+      line: "{{ item }}"
+      create: yes
+    with_items:
+      - 'interface=wlan0'
+      - 'server={{ dns_server}}'
+      - 'dhcp-range={{ network_1st_address }},{{ network_last_address }},12h'
+
+  - name: Set system to be able to forward traffic
+    replace:
+      path: /etc/sysctl.conf
+      regexp: '^#net.ipv4.ip_forward=1'
+      replace: 'net.ipv4.ip_forward=1'
+      owner: root
+      group: root
+
+  - name: Set system to forward traffic from our wlan0 connection to eth0 with iptables
+    shell: "iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; iptables-save > /etc/iptables.ipv4.nat"
+
+  - name: update rc.local to reload iptables rules on reboot
+    lineinfile:
+      path: /etc/rc.local
+      line: iptables-restore < /etc/iptables.ipv4.nat
+      create: yes
+
+  - name: start dnsmasq 
+    service:
+      name: dnsmasq
+      state: started
+
+  - name: unmask hostapd
+    shell: "systemctl unmask hostapd"
+
+  - name: unmask wlan0 from rfkill and enable interface
+    shell: "rfkill unblock wlan; ip link set wlan0 up"
+
+  - name: start hostapd
+    service:
+      name: hostapd
+      state: started
+
+  - name: Ensure a locale exists
+    locale_gen:
+      name: en_US.UTF-8
+      state: present
+
+  - name: Disable overscan
+    replace:
+      path: /boot/config.txt
+      regexp: '^#disable_overscan=1'
+      replace: 'disable_overscan=1'
+      owner: root
+      group: root
+
+  - name: Set timezone to America/Chicago
+    timezone:
+      name: America/Chicago
+
+  - name: update pi password and create ssh key
+    user:
+      name: pi
+      password: M4tth3w
+      generate_ssh_key: yes
+      ssh_key_bits: 2048
+      ssh_key_file: .ssh/id_rsa
+
+  - name: Stop intial config screen after reboot
+    file:
+      path: /etc/xdg/autostart/piwiz.desktop
+      state: absent
+
+  - name: reboot
+    reboot: 
