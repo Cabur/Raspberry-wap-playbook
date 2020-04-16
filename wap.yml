@@ -9,6 +9,7 @@
     subnet: "29"
     ssid: rpi_wap
     wap_password: CHANGEME
+    user_password: CHANGEME
     hostapd_conf: "/etc/hostapd/hostapd.conf"
     dns_server: '8.8.8.8'
     outbound_device: "eth0"
@@ -141,7 +142,7 @@
   - name: update pi password and create ssh key
     user:
       name: pi
-      password: M4tth3w
+      password: {{ user_password }}
       generate_ssh_key: yes
       ssh_key_bits: 2048
       ssh_key_file: .ssh/id_rsa
